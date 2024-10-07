@@ -1,6 +1,11 @@
 import UIKit
 import StoreKit
 
+public protocol SubscriptionManagerDelegate {
+    func handleStoreKit2TransactionBeforeFinish(transaction: Transaction) async
+    func handleStoreKit1TransactionBeforeFinish(transaction: SKPaymentTransaction)
+    func syncStoreKit2Purchases()
+}
 
 public class SubscriptionManager: NSObject {
     
@@ -16,6 +21,7 @@ public class SubscriptionManager: NSObject {
     
     public static let shared = SubscriptionManager()
     public let notificationHandler = SubManagerNotificationHandler.shared
+    public var delegate: SubscriptionManagerDelegate?
     
     private var productIdentifiers: [String] = []
     private var subscriptionGroupId: String = ""
@@ -71,6 +77,11 @@ public class SubscriptionManager: NSObject {
         Task {
             print("GenericIAPHelper2:: loadIAPProducts from initWithProductIDS!")
             await self.loadIAPProducts()
+            await self.updateCurrentEntitlementStatus(shouldNotifyChange: false)
+            
+            if self.hasPurchasesHistory() {
+                self.delegate?.syncStoreKit2Purchases()
+            }
         }
     }
     
@@ -148,6 +159,7 @@ public class SubscriptionManager: NSObject {
         switch result {
         case let .success(.verified(transaction)):
             // Successful purhcase
+            await self.delegate?.handleStoreKit2TransactionBeforeFinish(transaction: transaction)
             await transaction.finish()
             await updateCurrentEntitlementStatus(shouldNotifyChange: false)
             print("GenericIAPHelper2:: Notifying about a purchase success!")
@@ -156,7 +168,6 @@ public class SubscriptionManager: NSObject {
         case let .success(.unverified(_, error)):
             // Successful purchase but transaction/receipt can't be verified
             // Could be a jailbroken phone
-            //TODO: Throw purchase fail notification unverified.
             print("GenericIAPHelper2:: Purchase unverified: error: \(error.localizedDescription)")
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseUnverified, nil)
             break
@@ -234,10 +245,11 @@ public class SubscriptionManager: NSObject {
 
         do {
             let fetchedProducts = try await Product.products(for: productIdentifiers)
+            self.isEligibleForIntro = await Product.SubscriptionInfo.isEligibleForIntroOffer(for: self.subscriptionGroupId)
+            
             if let transaction = await self.getLatestTransactionForSubscriptionGroup() {
                 await self.updateRenewalInfo(transaction: transaction)
             }
-            
             
             await MainActor.run {
                 for product in fetchedProducts {
@@ -318,6 +330,7 @@ extension SubscriptionManager {
         
         var purchasedProducts = Set<String>()
         
+        var userOnTrial = false
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else {
                 continue
@@ -325,12 +338,20 @@ extension SubscriptionManager {
             
             if transaction.revocationDate == nil {
                 purchasedProducts.insert(transaction.productID)
+                
+                if transaction.productType == .autoRenewable {
+                    if let offerType = transaction.offerType, offerType == .introductory {
+                        userOnTrial = true
+                    }
+                }
             }
             
             Task {
                 await self.updateRenewalInfo(transaction: transaction)
             }
         }
+        
+        self.isOnTrial = userOnTrial
         
         //Was subscribed, but now subscription expired.
         var subscriptionExpired = false
@@ -357,6 +378,8 @@ extension SubscriptionManager {
                 if (self.purchasedProducts.contains(productId)) {
                     self.deepLinkProductState = .deferred
                     self.deepLinkProductPurchaseId = nil
+                    
+                    self.delegate?.syncStoreKit2Purchases()
                     print("GenericIAPHelper2:: Notifying about a purchase success!")
                     self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
                 }
@@ -376,6 +399,7 @@ extension SubscriptionManager {
                 
                 print("GenericIAPHelper2:: StoreKit2: New Transaction update for: ", transaction.productID)
                 
+                await self.delegate?.handleStoreKit2TransactionBeforeFinish(transaction: transaction)
                 await transaction.finish()
                 await updateCurrentEntitlementStatus(shouldNotifyChange: true)
             }
@@ -473,13 +497,6 @@ extension SubscriptionManager {
             return
         }
         
-        //UPDATE IS_ON_TRIAL
-        if let offerType = transaction.offerType, offerType == .introductory {
-            self.isOnTrial = true
-        } else {
-            self.isOnTrial = false
-        }
-        
         if let expiryDate = transaction.expirationDate {
             self.subExpiryDate = expiryDate
         }
@@ -518,6 +535,8 @@ extension SubscriptionManager {
         print("GenericIAPHelper2::  expiry date: ", self.subExpiryDate ?? "No Expiry Date Found")
         print("GenericIAPHelper2::  purchase date: ", transaction.purchaseDate)
         print("GenericIAPHelper2::  original purchase date: ", transaction.originalPurchaseDate)
+        print("GenericIAPHelper2::  original transaction id: ", transaction.originalID)
+        print("GenericIAPHelper2::  transaction id: ", transaction.id)
     }
     
     private func getLatestTransactionForSubscriptionGroup() async -> Transaction? {
@@ -539,13 +558,6 @@ extension SubscriptionManager {
                 }
             }
         }
-        
-        //TODO: USE LATEST TRANSACTION FOR TRANSACTION HISTORY UPDATE.
-//        if let transaction = latestTransaction {
-//            Task {
-//                await self.updateRenewalInfo(transaction: transaction)
-//            }
-//        }
         
         return latestTransaction
     }
@@ -730,6 +742,7 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
             }
             
             if transaction.transactionState != .purchasing {
+                self.delegate?.handleStoreKit1TransactionBeforeFinish(transaction: transaction)
                 SKPaymentQueue.default().finishTransaction(transaction)
             }
         }
