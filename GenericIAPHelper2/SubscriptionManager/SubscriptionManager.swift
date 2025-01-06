@@ -48,6 +48,8 @@ public class SubscriptionManager: NSObject {
     private var originalPurchaseDate: Date?
     private var autoRenewalOn = false
     
+    weak var confirmInScene: UIWindowScene?
+    
     private override init() {
         super.init()
         Task {
@@ -92,7 +94,15 @@ public class SubscriptionManager: NSObject {
         }
     }
     
-    public func purchaseRequest(productID: String) {
+    public func purchaseRequest(productID: String, inWindowScene: UIWindowScene? = nil) {
+        
+        self.confirmInScene = inWindowScene
+        if let scene = self.confirmInScene {
+            //Do nothing.
+        } else {
+            //Trying to get windowScene from UIApplication.shared
+            self.confirmInScene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
+        }
         
         guard let productToPurchase = self.allProducts[productID] else { return }
         
@@ -153,8 +163,21 @@ public class SubscriptionManager: NSObject {
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseFailure, nil)
             return
         }
+        //let viewController = await UIViewController()
+        var result: Product.PurchaseResult
         
-        let result = try await product.purchase()
+        if #available(iOS 17.0, *) {
+            
+            if let scene = self.confirmInScene {
+                result = try await product.purchase(confirmIn: scene, options: [])
+            } else {
+                //Failed to get any scene! which shouldn't happen by any means.
+                result = try await product.purchase()
+            }
+        } else {
+            result = try await product.purchase()
+            
+        }
 
         switch result {
         case let .success(.verified(transaction)):
@@ -300,6 +323,7 @@ extension SubscriptionManager {
     
     private func showProgressHud(text: String) {
         self.progressHudID = UUID().uuidString
+        //ProgressHUD.shared.main = self.confirmInScene?.keyWindow
         ProgressHUD.show(text, interaction: false)
     }
     
@@ -791,4 +815,5 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         return false
     }
 }
+
 
