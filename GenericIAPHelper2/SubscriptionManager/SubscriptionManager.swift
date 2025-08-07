@@ -395,7 +395,13 @@ extension SubscriptionManager {
             if (subscriptionExpired) {
                 self.notificationHandler.notifyObserversForNotificationType(.SubscriptionExpire, nil)
             } else if (newProductPurchased) {
-                self.notificationHandler.notifyObserversForNotificationType(.RestoreSuccessful, nil)
+                //NOTE: This condition might fulfill if we receive a callback on storekit1 updated transaction delegate before notifying about purchase success.
+                if self.ignoreTimerChecks { //If true, then we have a pending purchase, so notify purchase success.
+                    self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
+                } else {
+                    self.notificationHandler.notifyObserversForNotificationType(.RestoreSuccessful, nil)
+                }
+                
             }
             
             if let productId = self.deepLinkProductPurchaseId, self.deepLinkProductState == .purchasing {
