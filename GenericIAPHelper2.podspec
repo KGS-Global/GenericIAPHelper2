@@ -9,7 +9,7 @@
 Pod::Spec.new do |spec|
 
   spec.name         = "GenericIAPHelper2"
-  spec.version      = "0.0.4"
+  spec.version      = "1.0.0"
   spec.summary      = "A short description of GenericIAPHelper 2."
 
   spec.description  = <<-DESC 
