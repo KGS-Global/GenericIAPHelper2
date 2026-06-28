@@ -2,9 +2,19 @@ import UIKit
 import StoreKit
 
 public protocol SubscriptionManagerDelegate {
-    func handleStoreKit2TransactionBeforeFinish(transaction: Transaction) async
-    func handleStoreKit1TransactionBeforeFinish(transaction: SKPaymentTransaction)
+    
+    func handleSK2TranxAndFinishLater(transaction: Transaction) async -> Bool
+    func handleSK1TransactionAndFinishLater(transaction: SKPaymentTransaction) async -> Bool
+    func receivedAppstorePromotionalPurchaseRequest()
     func syncStoreKit2Purchases()
+    
+//    func handleStoreKit2TransactionBeforeFinish(transaction: Transaction) async
+//    func handleConsumableTransactionStorekit2(transaction: Transaction) async
+//    func handleStoreKit1TransactionBeforeFinish(transaction: SKPaymentTransaction)
+//    func isConsumableProduct(productId: String) -> Bool
+//
+//    func initiateAppstorePromotionalProductPurchase()
+//    func appReceiptBase64() -> String?
 }
 
 public class SubscriptionManager: NSObject {
@@ -46,6 +56,7 @@ public class SubscriptionManager: NSObject {
     private var subExpiryDate: Date?
     private var purchaseDate: Date?
     private var originalPurchaseDate: Date?
+    private var originalTransactionID: String?
     private var autoRenewalOn = false
     
     weak var confirmInScene: UIWindowScene?
@@ -87,10 +98,21 @@ public class SubscriptionManager: NSObject {
         }
     }
     
+    public func getOriginalTransactionID() -> String? {
+        return self.originalTransactionID
+    }
+    
     //Called from App Side
     public func refreshPurchaseableProducts() {
         if (self.productsLoaded) {
             self.notificationHandler.notifyObserversForNotificationType(.ProductLoaded, nil)
+        }
+    }
+    
+    public func purchasePromotionalProduct(inWindowScene: UIWindowScene? = nil) {
+        if let productId = self.deepLinkProductPurchaseId {
+            self.deepLinkProductPurchaseId = nil
+            self.purchaseRequest(productID: productId)
         }
     }
     
@@ -163,7 +185,7 @@ public class SubscriptionManager: NSObject {
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseFailure, nil)
             return
         }
-        //let viewController = await UIViewController()
+        
         var result: Product.PurchaseResult
         
         if #available(iOS 17.0, *) {
@@ -181,9 +203,13 @@ public class SubscriptionManager: NSObject {
 
         switch result {
         case let .success(.verified(transaction)):
+            
             // Successful purhcase
-            await self.delegate?.handleStoreKit2TransactionBeforeFinish(transaction: transaction)
-            await transaction.finish()
+//            let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(transaction: transaction) ?? true
+//            if shouldFinish {
+//                await transaction.finish()
+//            }
+            
             await updateCurrentEntitlementStatus(shouldNotifyChange: false)
             print("GenericIAPHelper2:: Notifying about a purchase success!")
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
@@ -280,7 +306,7 @@ public class SubscriptionManager: NSObject {
                 }
                 
                 self.productsLoaded = true
-                print("GenericIAPHelper2:: Products loaded!!!")
+                print("GenericIAPHelper2:: Products loaded!!! count: \(self.allProducts.count)")
             }
             
         } catch {
@@ -427,10 +453,16 @@ extension SubscriptionManager {
                     continue
                 }
                 
-                print("GenericIAPHelper2:: StoreKit2: New Transaction update for: ", transaction.productID)
                 
-                await self.delegate?.handleStoreKit2TransactionBeforeFinish(transaction: transaction)
-                await transaction.finish()
+                
+                
+                print("GenericIAPHelper2:: StoreKit2: New Transaction update for: \(transaction.productID), isUpgrade: \(transaction.isUpgraded)")
+                
+                let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(transaction: transaction) ?? true
+                if shouldFinish {
+                    await transaction.finish()
+                }
+                
                 await updateCurrentEntitlementStatus(shouldNotifyChange: true)
             }
         }
@@ -566,6 +598,7 @@ extension SubscriptionManager {
         print("GenericIAPHelper2::  purchase date: ", transaction.purchaseDate)
         print("GenericIAPHelper2::  original purchase date: ", transaction.originalPurchaseDate)
         print("GenericIAPHelper2::  original transaction id: ", transaction.originalID)
+        self.originalTransactionID = String(transaction.originalID)
         print("GenericIAPHelper2::  transaction id: ", transaction.id)
     }
     
@@ -749,6 +782,54 @@ extension SubscriptionManager {
 
 extension SubscriptionManager: SKPaymentTransactionObserver {
     
+    private func handleStoreKit1Transaction(_ transaction: SKPaymentTransaction) async {
+        
+        //MARK: LOOK FOR STOREKIT 2 TRANSACTION, IF FOUND TRY TO GRANT WITH THAT & LATER FINISH SK1 TRANX.
+        //MARK: IF NO SK2 TRANX FOUND, RESOLVE USING SERVER & RECEIPT.
+        //MARK: LATER, DETERMINE IF WE SHOULD FINISH THE TRANSACTION OR NOT.
+        
+        
+        if let sk2transaction = await self.fetchSK2TransactionForSK1Consumable(productId: transaction.payment.productIdentifier) {
+            
+            print("BAKER TEST: sk1 id: \(transaction.transactionIdentifier), sk2Id: \(sk2transaction.id)")
+            
+            let shouldFinish = await self.delegate?.handleSK2TranxAndFinishLater(transaction: sk2transaction) ?? true
+            
+            if (shouldFinish) {
+                print("BAKER TEST: About to finish storekit 1 transaction! id: ", transaction.transactionIdentifier)
+                SKPaymentQueue.default().finishTransaction(transaction)
+            }
+            
+            return
+        }
+        
+        //MARK: WE DIDN'T FOUND STOREKIT2 TRANSACTION FOR THIS SK1 TRANSACTION,
+        //TRY SERVER SIDE VALIDATION USING RECEIPT
+        let shouldFinish = await self.delegate?.handleSK1TransactionAndFinishLater(transaction: transaction) ?? true
+        if (shouldFinish) {
+            SKPaymentQueue.default().finishTransaction(transaction)
+        }
+        
+        
+    }
+    
+    private func fetchSK2TransactionForSK1Consumable(productId: String) async -> Transaction? {
+        // Retry up to ~10s (tunable). Some devices take longer than 1–2s.
+        for attempt in 0..<20 {
+            if let res = await Transaction.latest(for: productId) {
+                if case .verified(let tx) = res {
+                    return tx
+                }
+            }
+
+            let delayMs = attempt < 5 ? 200 : 500
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+        }
+        return nil
+    }
+    
+    
+    
     public func paymentQueue(_ queue: SKPaymentQueue, updatedTransactions transactions: [SKPaymentTransaction]) {
         
         if transactions.isEmpty {
@@ -756,6 +837,8 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         }
 
         for transaction in transactions {
+            
+            //TODO: MARK: PURCHASING STOREKIT1 WEEKLY CAUSING CALLBACK FOR BOTH WEEKLY AND WEEKLY_TRIAL
             
             print("GenericIAPHelper2:: StoreKit1: updatedTransactions:: productID: \(transaction.payment.productIdentifier) state: \(transaction.transactionState.rawValue)")
             
@@ -772,8 +855,14 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
             }
             
             if transaction.transactionState != .purchasing {
-                self.delegate?.handleStoreKit1TransactionBeforeFinish(transaction: transaction)
-                SKPaymentQueue.default().finishTransaction(transaction)
+                                
+                //required for qonversion
+                self.delegate?.syncStoreKit2Purchases()
+                
+                //Need to finish the transaction -> first try to find the equivalant storekit2 transaction
+                Task {
+                    await self.handleStoreKit1Transaction(transaction)
+                }
             }
         }
         
@@ -814,12 +903,15 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         self.deepLinkProductPurchaseId = product.productIdentifier
         self.deepLinkProductState = .deferred
         
-        self.showProgressHud(text: "Please wait...")
-        self.dismissProgressHud(after: 30, progressId: self.progressHudID)
-//        self.notificationHandler.notifyObserversForNotificationType(.PromotionPurchaseStart, nil)
+        //MARK: TRY CALLING PURCHASE FROM THE APP USING STOREKIT 2
+        //MARK: call public func purchasePromotionalProduct(inWindowScene: UIWindowScene? = nil) to initiate the purchase
+        self.delegate?.receivedAppstorePromotionalPurchaseRequest()
         
+        
+        //MARK: ALWAYS RETURN FALSE HERE, AS WE DON'T WANT TO INITIATE A PURCHASE IN STOREKIT1 SKPaymentQueue.
         return false
     }
 }
+
 
 
