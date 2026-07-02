@@ -1,20 +1,23 @@
 import UIKit
 import StoreKit
 
+public class VerifiedStoreKitTransaction {
+    public let transaction: Transaction
+    public let signedTransactionInfo: String
+    
+    init(transaction: Transaction, signedTransactionInfo: String) {
+        self.transaction = transaction
+        self.signedTransactionInfo = signedTransactionInfo
+    }
+}
+
+
 public protocol SubscriptionManagerDelegate {
     
-    func handleSK2TranxAndFinishLater(transaction: Transaction) async -> Bool
+    func handleSK2TranxAndFinishLater(verifiedTransaction: VerifiedStoreKitTransaction) async -> Bool
     func handleSK1TransactionAndFinishLater(transaction: SKPaymentTransaction) async -> Bool
     func receivedAppstorePromotionalPurchaseRequest()
     func syncStoreKit2Purchases()
-    
-//    func handleStoreKit2TransactionBeforeFinish(transaction: Transaction) async
-//    func handleConsumableTransactionStorekit2(transaction: Transaction) async
-//    func handleStoreKit1TransactionBeforeFinish(transaction: SKPaymentTransaction)
-//    func isConsumableProduct(productId: String) -> Bool
-//
-//    func initiateAppstorePromotionalProductPurchase()
-//    func appReceiptBase64() -> String?
 }
 
 public class SubscriptionManager: NSObject {
@@ -211,7 +214,7 @@ public class SubscriptionManager: NSObject {
 //            }
             
             await updateCurrentEntitlementStatus(shouldNotifyChange: false)
-            print("GenericIAPHelper2:: Notifying about a purchase success!")
+            print("GenericIAPHelper2:: Notifying about a purchase success!, tranxID: \(transaction.id)")
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
             
         case let .success(.unverified(_, error)):
@@ -449,16 +452,17 @@ extension SubscriptionManager {
         Task(priority: .background) { [unowned self] in
             for await result in Transaction.updates {
                 
+                let signedTransactionInfo = result.jwsRepresentation
+                
                 guard case .verified(let transaction) = result else {
                     continue
                 }
                 
+                print("GenericIAPHelper2:: StoreKit2: New Transaction update for: \(transaction.productID), isUpgrade: \(transaction.isUpgraded), tranxID: \(transaction.id)")
                 
+                let verifiedTransaction = VerifiedStoreKitTransaction(transaction: transaction, signedTransactionInfo: signedTransactionInfo)
                 
-                
-                print("GenericIAPHelper2:: StoreKit2: New Transaction update for: \(transaction.productID), isUpgrade: \(transaction.isUpgraded)")
-                
-                let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(transaction: transaction) ?? true
+                let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(verifiedTransaction: verifiedTransaction) ?? true
                 if shouldFinish {
                     await transaction.finish()
                 }
@@ -789,14 +793,14 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         //MARK: LATER, DETERMINE IF WE SHOULD FINISH THE TRANSACTION OR NOT.
         
         
-        if let sk2transaction = await self.fetchSK2TransactionForSK1Consumable(productId: transaction.payment.productIdentifier) {
+        if let verifiedTransaction = await self.fetchSK2TransactionForSK1Consumable(productId: transaction.payment.productIdentifier) {
             
-            print("BAKER TEST: sk1 id: \(transaction.transactionIdentifier), sk2Id: \(sk2transaction.id)")
+            print("BAKER TEST: sk1 id: \(transaction.transactionIdentifier ?? "undefined"), sk2Id: \(verifiedTransaction.transaction.id)")
             
-            let shouldFinish = await self.delegate?.handleSK2TranxAndFinishLater(transaction: sk2transaction) ?? true
+            let shouldFinish = await self.delegate?.handleSK2TranxAndFinishLater(verifiedTransaction: verifiedTransaction) ?? true
             
             if (shouldFinish) {
-                print("BAKER TEST: About to finish storekit 1 transaction! id: ", transaction.transactionIdentifier)
+                print("BAKER TEST: About to finish storekit 1 transaction! id: ", transaction.transactionIdentifier ?? "undefined")
                 SKPaymentQueue.default().finishTransaction(transaction)
             }
             
@@ -813,12 +817,14 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         
     }
     
-    private func fetchSK2TransactionForSK1Consumable(productId: String) async -> Transaction? {
+    public func fetchSK2TransactionForSK1Consumable(productId: String) async -> VerifiedStoreKitTransaction? {
         // Retry up to ~10s (tunable). Some devices take longer than 1–2s.
         for attempt in 0..<20 {
             if let res = await Transaction.latest(for: productId) {
-                if case .verified(let tx) = res {
-                    return tx
+                
+                let signedTransactionInfo = res.jwsRepresentation
+                if case .verified(let transaction) = res {
+                    return VerifiedStoreKitTransaction(transaction: transaction, signedTransactionInfo: signedTransactionInfo)
                 }
             }
 
@@ -840,7 +846,7 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
             
             //TODO: MARK: PURCHASING STOREKIT1 WEEKLY CAUSING CALLBACK FOR BOTH WEEKLY AND WEEKLY_TRIAL
             
-            print("GenericIAPHelper2:: StoreKit1: updatedTransactions:: productID: \(transaction.payment.productIdentifier) state: \(transaction.transactionState.rawValue)")
+            print("GenericIAPHelper2:: StoreKit1: updatedTransactions:: productID: \(transaction.payment.productIdentifier) state: \(transaction.transactionState.rawValue), tranxID: \(transaction.transactionIdentifier)")
             
             if transaction.payment.productIdentifier == self.deepLinkProductPurchaseId {
                 self.deepLinkProductState = transaction.transactionState
