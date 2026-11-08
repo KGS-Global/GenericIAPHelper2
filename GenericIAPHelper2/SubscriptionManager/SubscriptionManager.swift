@@ -569,7 +569,7 @@ extension SubscriptionManager {
         
         
         self.purchaseDate = transaction.purchaseDate
-        self.originalPurchaseDate = transaction.purchaseDate
+        self.originalPurchaseDate = transaction.originalPurchaseDate
         
         if (InternetChecker.shared.isInternetConnected()) {
             self.isEligibleForIntro = await Product.SubscriptionInfo.isEligibleForIntroOffer(for: self.subscriptionGroupId)
