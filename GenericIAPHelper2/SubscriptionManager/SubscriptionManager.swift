@@ -46,6 +46,7 @@ public class SubscriptionManager: NSObject {
     
     
     private var expiryCheckTimer: Timer?
+    private var lastHandledExpiryDate: Date?
     private var ignoreTimerChecks = false
     private var updateTask: Task<Void, Never>? = nil
     private var purchaseStatusChecked = false
@@ -63,6 +64,10 @@ public class SubscriptionManager: NSObject {
     private var autoRenewalOn = false
     
     weak var confirmInScene: UIWindowScene?
+    
+    private var cachedSubscriptionProfile: SubscriptionUserProfile?
+    private var isProfileLoading = false
+    private var isProfileStale = true
     
     private override init() {
         super.init()
@@ -119,7 +124,9 @@ public class SubscriptionManager: NSObject {
         }
     }
     
-    public func purchaseRequest(productID: String, inWindowScene: UIWindowScene? = nil) {
+    public func purchaseRequest(productID: String,
+                                inWindowScene: UIWindowScene? = nil,
+                                purchaseOptions: Set<Product.PurchaseOption> = []) {
         
         self.confirmInScene = inWindowScene
         if let scene = self.confirmInScene {
@@ -142,7 +149,7 @@ public class SubscriptionManager: NSObject {
         
         Task {
             do {
-                try await self.purchase(product: productToPurchase)
+                try await self.purchase(product: productToPurchase, options: purchaseOptions)
             } catch {
                 print("GenericIAPHelper2:: Purchase error for product: \(productID) error: \(error.localizedDescription)")
             }
@@ -180,9 +187,13 @@ public class SubscriptionManager: NSObject {
     }
     
     
-    private func purchase(product: Product) async throws {
+    private func purchase(product: Product, options: Set<Product.PurchaseOption> = []) async throws {
         
         self.ignoreTimerChecks = true
+        defer {
+            self.ignoreTimerChecks = false
+        }
+        
         if InternetChecker.shared.isInternetConnected() == false {
             self.ignoreTimerChecks = false
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseFailure, nil)
@@ -194,13 +205,13 @@ public class SubscriptionManager: NSObject {
         if #available(iOS 17.0, *) {
             
             if let scene = self.confirmInScene {
-                result = try await product.purchase(confirmIn: scene, options: [])
+                result = try await product.purchase(confirmIn: scene, options: options)
             } else {
                 //Failed to get any scene! which shouldn't happen by any means.
-                result = try await product.purchase()
+                result = try await product.purchase(options: options)
             }
         } else {
-            result = try await product.purchase()
+            result = try await product.purchase(options: options)
             
         }
 
@@ -208,14 +219,22 @@ public class SubscriptionManager: NSObject {
         case let .success(.verified(transaction)):
             
             // Successful purhcase
-//            let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(transaction: transaction) ?? true
-//            if shouldFinish {
-//                await transaction.finish()
-//            }
+            
+            if case let .success(verificationResult) = result {
+                    await self.handleVerifiedTransaction(
+                        transaction: transaction,
+                        signedTransactionInfo: verificationResult.jwsRepresentation
+                    )
+                }
+            
             
             await updateCurrentEntitlementStatus(shouldNotifyChange: false)
             print("GenericIAPHelper2:: Notifying about a purchase success!, tranxID: \(transaction.id)")
             self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
+            
+            self.invalidateSubscriptionUserProfile()
+            await self.refreshSubscriptionUserProfile()
+            
             
         case let .success(.unverified(_, error)):
             // Successful purchase but transaction/receipt can't be verified
@@ -298,6 +317,7 @@ public class SubscriptionManager: NSObject {
         do {
             let fetchedProducts = try await Product.products(for: productIdentifiers)
             self.isEligibleForIntro = await Product.SubscriptionInfo.isEligibleForIntroOffer(for: self.subscriptionGroupId)
+            await self.refreshSubscriptionUserProfile()
             
             if let transaction = await self.getLatestTransactionForSubscriptionGroup() {
                 await self.updateRenewalInfo(transaction: transaction)
@@ -343,9 +363,15 @@ extension SubscriptionManager {
         print("GenericIAPHelper2:: Checking subscription expiry with local time!")
         guard let expiryDate = self.subExpiryDate else { return }
         
-        if expiryDate < Date() {
+        if expiryDate <= Date(),
+           lastHandledExpiryDate != expiryDate {
+
+            lastHandledExpiryDate = expiryDate
+            invalidateSubscriptionUserProfile()
+
             Task {
                 await updateCurrentEntitlementStatus(shouldNotifyChange: true)
+                await refreshSubscriptionUserProfile()
             }
         }
     }
@@ -460,15 +486,36 @@ extension SubscriptionManager {
                 
                 print("GenericIAPHelper2:: StoreKit2: New Transaction update for: \(transaction.productID), isUpgrade: \(transaction.isUpgraded), tranxID: \(transaction.id)")
                 
-                let verifiedTransaction = VerifiedStoreKitTransaction(transaction: transaction, signedTransactionInfo: signedTransactionInfo)
-                
-                let shouldFinish: Bool = await self.delegate?.handleSK2TranxAndFinishLater(verifiedTransaction: verifiedTransaction) ?? true
-                if shouldFinish {
-                    await transaction.finish()
-                }
+                await self.handleVerifiedTransaction(
+                                transaction: transaction,
+                                signedTransactionInfo: result.jwsRepresentation
+                            )
                 
                 await updateCurrentEntitlementStatus(shouldNotifyChange: true)
+                
+                self.invalidateSubscriptionUserProfile()
+                await self.refreshSubscriptionUserProfile()
             }
+        }
+    }
+    
+    private func handleVerifiedTransaction(
+        transaction: Transaction,
+        signedTransactionInfo: String
+    ) async {
+
+        let verified = VerifiedStoreKitTransaction(
+            transaction: transaction,
+            signedTransactionInfo: signedTransactionInfo
+        )
+
+        let shouldFinish = await delegate?
+            .handleSK2TranxAndFinishLater(
+                verifiedTransaction: verified
+            ) ?? true
+
+        if shouldFinish {
+            await transaction.finish()
         }
     }
 }
@@ -496,6 +543,8 @@ extension SubscriptionManager {
     }
     
     @objc private func appWillEnterForeground() {
+        
+        self.invalidateSubscriptionUserProfile()
         Task {
             await self.loadIAPProducts()
             if (InternetChecker.shared.isInternetConnected()) {
@@ -642,7 +691,6 @@ extension SubscriptionManager {
             return nil
         }
         
-    
         for productId in self.purchasedProducts {
             return productId
         }
@@ -656,6 +704,10 @@ extension SubscriptionManager {
         }
         
         return nil
+    }
+    
+    public func getProduct(for productID: String) -> Product? {
+        allProducts[productID]
     }
     
     public func getPurchaseDateString() -> String?{
@@ -917,6 +969,68 @@ extension SubscriptionManager: SKPaymentTransactionObserver {
         //MARK: ALWAYS RETURN FALSE HERE, AS WE DON'T WANT TO INITIATE A PURCHASE IN STOREKIT1 SKPaymentQueue.
         return false
     }
+}
+
+
+extension SubscriptionManager {
+    
+    private func refreshSubscriptionUserProfile(
+        forceRefresh: Bool = false
+    ) async {
+
+        guard !subscriptionGroupId.isEmpty else {
+            return
+        }
+
+        // Skip if we already have a valid profile.
+        if !forceRefresh,
+           !isProfileStale,
+           cachedSubscriptionProfile != nil {
+            return
+        }
+
+        // Prevent overlapping refresh attempts.
+        guard !isProfileLoading else {
+            return
+        }
+
+        isProfileLoading = true
+        defer { isProfileLoading = false }
+
+        do {
+            let profile = try await
+                SubscriptionSegmentDetector().detect(
+                    subscriptionGroupID: subscriptionGroupId
+                )
+
+            cachedSubscriptionProfile = profile
+            isProfileStale = false
+
+            print("Subscription profile:", profile.segment)
+
+        } catch {
+            print(
+                "Subscription profile refresh failed:",
+                error.localizedDescription
+            )
+            isProfileStale = true
+        }
+    }
+
+    public func getSubscriptionUserProfile()
+        -> SubscriptionUserProfile? {
+            
+        guard !isProfileStale else { return nil }
+        return cachedSubscriptionProfile
+    }
+    
+    private func invalidateSubscriptionUserProfile() {
+        isProfileStale = true
+    }
+}
+
+public enum SubscriptionProfileError: Error {
+    case missingGroupID
 }
 
 

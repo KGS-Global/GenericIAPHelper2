@@ -20,6 +20,8 @@
 		2E8C12332CAD0381007B4EA5 /* ProgressHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8C12272CAD0380007B4EA5 /* ProgressHUD.swift */; };
 		2E8C12342CAD0381007B4EA5 /* ProgressHUD+Banner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8C12282CAD0380007B4EA5 /* ProgressHUD+Banner.swift */; };
 		2E8C12352CAD0381007B4EA5 /* Reachability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E8C12292CAD0380007B4EA5 /* Reachability.swift */; };
+		6B4EE0B330B5D01400FA0A64 /* SubscriptionUserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4EE0B230B5D01400FA0A64 /* SubscriptionUserProfile.swift */; };
+		6B4EE0B430B5D01400FA0A64 /* SubscriptionSegmentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4EE0B130B5D01400FA0A64 /* SubscriptionSegmentDetector.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +39,8 @@
 		2E8C12272CAD0380007B4EA5 /* ProgressHUD.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProgressHUD.swift; sourceTree = "<group>"; };
 		2E8C12282CAD0380007B4EA5 /* ProgressHUD+Banner.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "ProgressHUD+Banner.swift"; sourceTree = "<group>"; };
 		2E8C12292CAD0380007B4EA5 /* Reachability.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Reachability.swift; sourceTree = "<group>"; };
+		6B4EE0B130B5D01400FA0A64 /* SubscriptionSegmentDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionSegmentDetector.swift; sourceTree = "<group>"; };
+		6B4EE0B230B5D01400FA0A64 /* SubscriptionUserProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionUserProfile.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +83,8 @@
 		2E8C121B2CAD0380007B4EA5 /* SubscriptionManager */ = {
 			isa = PBXGroup;
 			children = (
+				6B4EE0B130B5D01400FA0A64 /* SubscriptionSegmentDetector.swift */,
+				6B4EE0B230B5D01400FA0A64 /* SubscriptionUserProfile.swift */,
 				2E8C121C2CAD0380007B4EA5 /* SubscriptionManager.swift */,
 				2E8C121D2CAD0380007B4EA5 /* SubManagerNotificationHandler.swift */,
 				2E8C121E2CAD0380007B4EA5 /* SubManagerNotificationObserver.swift */,
@@ -193,6 +199,8 @@
 				2E8C122F2CAD0381007B4EA5 /* ProgressHUD+Animations.swift in Sources */,
 				2E8C12352CAD0381007B4EA5 /* Reachability.swift in Sources */,
 				2E8C12322CAD0381007B4EA5 /* ProgressHUD+Public.swift in Sources */,
+				6B4EE0B330B5D01400FA0A64 /* SubscriptionUserProfile.swift in Sources */,
+				6B4EE0B430B5D01400FA0A64 /* SubscriptionSegmentDetector.swift in Sources */,
 				2E8C12342CAD0381007B4EA5 /* ProgressHUD+Banner.swift in Sources */,
 				2E8C122C2CAD0381007B4EA5 /* SubManagerNotificationObserver.swift in Sources */,
 				2E8C12312CAD0381007B4EA5 /* ProgressHUD+Enums.swift in Sources */,
