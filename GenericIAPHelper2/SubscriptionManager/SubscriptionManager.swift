@@ -230,11 +230,9 @@ public class SubscriptionManager: NSObject {
             
             await updateCurrentEntitlementStatus(shouldNotifyChange: false)
             print("GenericIAPHelper2:: Notifying about a purchase success!, tranxID: \(transaction.id)")
-            self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
             
-            self.invalidateSubscriptionUserProfile()
             await self.refreshSubscriptionUserProfile()
-            
+            self.notificationHandler.notifyObserversForNotificationType(.PurchaseSuccessful, nil)
             
         case let .success(.unverified(_, error)):
             // Successful purchase but transaction/receipt can't be verified
@@ -367,11 +365,9 @@ extension SubscriptionManager {
            lastHandledExpiryDate != expiryDate {
 
             lastHandledExpiryDate = expiryDate
-            invalidateSubscriptionUserProfile()
 
             Task {
                 await updateCurrentEntitlementStatus(shouldNotifyChange: true)
-                await refreshSubscriptionUserProfile()
             }
         }
     }
@@ -491,10 +487,8 @@ extension SubscriptionManager {
                                 signedTransactionInfo: result.jwsRepresentation
                             )
                 
-                await updateCurrentEntitlementStatus(shouldNotifyChange: true)
-                
-                self.invalidateSubscriptionUserProfile()
                 await self.refreshSubscriptionUserProfile()
+                await updateCurrentEntitlementStatus(shouldNotifyChange: true)
             }
         }
     }
@@ -544,7 +538,6 @@ extension SubscriptionManager {
     
     @objc private func appWillEnterForeground() {
         
-        self.invalidateSubscriptionUserProfile()
         Task {
             await self.loadIAPProducts()
             if (InternetChecker.shared.isInternetConnected()) {
@@ -982,12 +975,12 @@ extension SubscriptionManager {
             return
         }
 
-        // Skip if we already have a valid profile.
-        if !forceRefresh,
-           !isProfileStale,
-           cachedSubscriptionProfile != nil {
-            return
-        }
+        //        // Skip if we already have a valid profile.
+        //        if !forceRefresh,
+        //           !isProfileStale,
+        //           cachedSubscriptionProfile != nil {
+        //            return
+        //        }
 
         // Prevent overlapping refresh attempts.
         guard !isProfileLoading else {
@@ -1006,11 +999,11 @@ extension SubscriptionManager {
             cachedSubscriptionProfile = profile
             isProfileStale = false
 
-            print("Subscription profile:", profile.segment)
+            print("BAKER TEST ## Subscription profile:", profile.segment)
 
         } catch {
             print(
-                "Subscription profile refresh failed:",
+                "BAKER TEST ## Subscription profile refresh failed:",
                 error.localizedDescription
             )
             isProfileStale = true
@@ -1019,19 +1012,14 @@ extension SubscriptionManager {
 
     public func getSubscriptionUserProfile()
         -> SubscriptionUserProfile? {
-            
-        guard !isProfileStale else { return nil }
         return cachedSubscriptionProfile
-    }
-    
-    private func invalidateSubscriptionUserProfile() {
-        isProfileStale = true
     }
 }
 
 public enum SubscriptionProfileError: Error {
     case missingGroupID
 }
+
 
 
 
